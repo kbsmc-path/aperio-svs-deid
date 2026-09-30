@@ -1,0 +1,22 @@
+# environment
+.venv/
+__pycache__/
+*.pyc
+
+# logs written next to the program
+*.log
+
+# build output (python build_exe.py) - the .exe is attached to a GitHub Release instead
+exe/
+build_tmp/
+*.spec
+
+# slide data and per-folder working files - never commit slides
+*.svs
+*.tif
+*.tiff
+*.bak
+.wsi_thumbs/
+move_log.csv
+rename_log.csv
+.claude/
