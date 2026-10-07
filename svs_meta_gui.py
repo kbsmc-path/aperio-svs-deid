@@ -51,6 +51,7 @@ if sys.version_info < MIN_PYTHON:
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
+    from tkinter import font as tkfont
 except ImportError as e:
     _missing(f"tkinter (Python's GUI library) is not available: {e}\n"
              "tkinter(파이썬 GUI 모듈)가 없습니다.",
@@ -179,21 +180,37 @@ DATE_CHOICES = [
     ("date_keep", None, False),
 ]
 
-OPTIONS_W = 360           # width reserved for the options panel on the right
+# Sizes below are in pixels at 100 % Windows scaling; App._px() scales them to the screen.
+OPTIONS_W = 360           # minimum width of the options panel on the right
+WIN_W, WIN_H = 1500, 950  # preferred window size when the screen has room
+LOG_LINES = 12            # log pane height ...
+LOG_LINES_COMPACT = 4     # ... shrinks to this before the spacing is tightened ...
+LOG_LINES_MIN = 2         # ... and at most to this, so the options still fit on screen
+
+# Run box colours - the box that actually does something has to stand out from the options
+RUN_ACCENT = "#1565c0"    # border / title
+RUN_BG = "#e8f1fc"        # box background
+PREVIEW_BG, PREVIEW_HOVER = "#1565c0", "#0d47a1"
+APPLY_BG, APPLY_HOVER = "#c62828", "#8e0000"     # red: this one writes to the files
+BTN_DISABLED_BG = "#9e9e9e"
 
 
 class App(tk.Tk):
     def __init__(self, folder):
         super().__init__()
+        # Fonts follow Windows display scaling (150 % -> 1.5x) but pixel sizes do not, so every
+        # fixed size goes through _px(), or text gets clipped on a high-DPI screen.
+        self.scale = max(1.0, self.winfo_fpixels("1i") / 96.0)
         self.title(t("deid_title"))
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        self.geometry(f"{min(1500, int(sw * 0.8))}x{min(950, int(sh * 0.85))}+60+40")
         self.rows = {}            # path -> treeview item id
         self.files = []
         self.q = queue.Queue()
         self.busy = False
         self.rows_data = {}        # path -> (values, tag)  kept so a rebuild is instant
+        self.log_lines = LOG_LINES
+        self._setup_style()
         self._build_ui()
+        self._fit_to_screen(first=True)
         self.after(100, self._poll)
         if folder and os.path.isdir(folder):
             self.folder_var.set(folder)
@@ -218,6 +235,7 @@ class App(tk.Tk):
             w.destroy()
         self.title(t("deid_title"))
         self._build_ui()
+        self._fit_to_screen()                   # labels differ in length between languages
         self.folder_var.set(keep["folder"])
         self.date_var.set(keep["date"])
         self.rm_time.set(keep["rm_time"]); self.rm_ids.set(keep["rm_ids"])
@@ -237,9 +255,162 @@ class App(tk.Tk):
         console("")
         console(f"language -> {code}")
 
+    # ------------------------------------------------------------------ layout / screen size
+    def _px(self, n):
+        """Pixels at 100 % scaling -> pixels on this screen."""
+        return int(round(n * self.scale))
+
+    def _setup_style(self):
+        style = ttk.Style(self)
+        # Tk 8.6 keeps a fixed Treeview row height, which cuts off scaled-up text
+        line = tkfont.nametofont("TkDefaultFont").metrics("linespace")
+        style.configure("Treeview", rowheight=int(line * 1.4))
+        style.configure("Run.TCheckbutton", background=RUN_BG)
+        self.run_font = tkfont.nametofont("TkDefaultFont").copy()      # kept on self: a Font
+        size = self.run_font.cget("size")                               # dies with its object
+        self.run_font.configure(weight="bold", size=size + 1 if size > 0 else size - 1)
+
+    def _run_button(self, parent, text, command, bg, hover):
+        """Coloured, bold button - ttk buttons cannot be coloured with the native Windows theme."""
+        b = tk.Button(parent, text=text, command=command, font=self.run_font,
+                      bg=bg, fg="white", activebackground=hover, activeforeground="white",
+                      disabledforeground="#eeeeee", relief=tk.FLAT, borderwidth=0,
+                      cursor="hand2", padx=self._px(6), pady=self._px(6))
+        b.normal_bg = bg
+        b.bind("<Enter>", lambda e: b.cget("state") == tk.NORMAL and b.configure(bg=hover))
+        b.bind("<Leave>", lambda e: b.cget("state") == tk.NORMAL and b.configure(bg=bg))
+        return b
+
+    def _set_apply_enabled(self, on):
+        b = self.apply_btn
+        b.configure(state=tk.NORMAL if on else tk.DISABLED,
+                    bg=b.normal_bg if on else BTN_DISABLED_BG,
+                    cursor="hand2" if on else "arrow")
+
+    def _work_area(self):
+        """(x, y, w, h) of the primary screen minus the taskbar, in the pixels Tk uses."""
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                r = wintypes.RECT()
+                if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0):  # SPI_GETWORKAREA
+                    return r.left, r.top, r.right - r.left, r.bottom - r.top
+            except Exception:  # noqa
+                pass
+        return 0, 0, self.winfo_screenwidth(), self.winfo_screenheight() - self._px(60)
+
+    def _fit_to_screen(self, first=False):
+        """Size the window so every control is visible, whatever the resolution and scaling.
+
+        Sizes are measured from the built widgets, then clamped to the work area. On a short
+        screen the log pane gives up lines, then the spacing tightens, then the log shrinks
+        further; if the options still do not fit, they get a scrollbar (the Run box with
+        Preview / Apply stays pinned below them) instead of being silently cut off.
+        """
+        ax, ay, aw, ah = self._work_area()
+        frame_w, frame_h = self._px(16), self._px(40)      # borders and title bar
+        max_w, max_h = aw - frame_w, ah - frame_h
+
+        def too_tall():
+            self.update_idletasks()
+            self._sync_options()
+            self.update_idletasks()
+            return self.winfo_reqheight() > max_h
+
+        def shrink_log(down_to):
+            while self.log_lines > down_to and too_tall():
+                self.log_lines -= 1
+                self.log.configure(height=self.log_lines)
+
+        self.log_lines = LOG_LINES
+        self.log.configure(height=self.log_lines)
+        shrink_log(LOG_LINES_COMPACT)
+        if too_tall():
+            for b in self.option_boxes:
+                b.configure(padding=(self._px(6), self._px(1)))
+                b.pack_configure(pady=self._px(1))
+            self.run_box.pack_configure(pady=self._px(1))
+            self.sample_label.pack_configure(pady=0)
+            self.run_title.pack_forget()             # the coloured box says "run" well enough
+            self.run_first_check.pack_configure(pady=(self._px(4), 0))
+            self.run_btns.pack_configure(pady=(self._px(3), self._px(4)))
+            for b in self.run_buttons:
+                b.configure(pady=self._px(3))
+            self.log_box.configure(padding=self._px(1))
+            self.log_box.pack_configure(pady=self._px(1))
+            self.top_bar.configure(padding=(self._px(6), self._px(2)))
+            shrink_log(LOG_LINES_MIN)
+        too_tall()
+        req_h = self.winfo_reqheight()
+        min_w = min(self.options_holder.winfo_reqwidth() + self._px(450), max_w)
+        min_h = min(req_h, max_h)
+        self.minsize(min_w, min_h)
+
+        if first:
+            w = min(max(min(self._px(WIN_W), int(aw * 0.9)), min_w), max_w)
+            h = min(max(min(self._px(WIN_H), int(ah * 0.9)), req_h), max_h)
+            x = ax + max(0, (aw - w - frame_w) // 2)
+            y = ay + max(0, (ah - h - frame_h) // 2)
+            self.geometry(f"{w}x{h}+{x}+{y}")
+        elif self.state() == "normal":
+            w, h = self.winfo_width(), self.winfo_height()
+            if w < min_w or h < min_h:
+                self.geometry(f"{max(w, min_w)}x{max(h, min_h)}")
+
+    def _build_options_panel(self, parent):
+        """Right-hand options column, inside a canvas that scrolls only when it does not fit.
+
+        Returns (inner, run_area): the options go in `inner`; `run_area` is pinned below the
+        scrolling part, so the Run box (Preview / Apply) is always on screen.
+        """
+        holder = ttk.Frame(parent)
+        holder.pack(side=tk.RIGHT, fill=tk.Y)
+        self.options_holder = holder
+        run_area = ttk.Frame(holder, padding=(self._px(8), 0))
+        run_area.pack(side=tk.BOTTOM, fill=tk.X)
+        scroll_area = ttk.Frame(holder)
+        scroll_area.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        bg = ttk.Style(self).lookup("TFrame", "background") or self.cget("background")
+        canvas = tk.Canvas(scroll_area, highlightthickness=0, borderwidth=0, background=bg,
+                           yscrollincrement=self._px(20))
+        sb = ttk.Scrollbar(scroll_area, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side=tk.LEFT, fill=tk.Y)
+        inner = ttk.Frame(canvas, padding=(self._px(8), 0))
+        ttk.Frame(inner, width=self._px(OPTIONS_W - 16), height=1).pack()   # minimum width
+        canvas.create_window(0, 0, window=inner, anchor="nw")
+
+        def sync(_=None):
+            w, h = inner.winfo_reqwidth(), inner.winfo_reqheight()
+            canvas.configure(width=w, height=h, scrollregion=(0, 0, w, h))
+
+        def resized(e):
+            need = inner.winfo_reqheight() > e.height + self._px(6)     # ignore the last box's margin
+            if need and not sb.winfo_ismapped():
+                sb.pack(side=tk.RIGHT, fill=tk.Y)
+            elif not need and sb.winfo_ismapped():
+                sb.pack_forget()
+                canvas.yview_moveto(0)
+
+        def wheel(e):
+            try:
+                w = str(self.winfo_containing(e.x_root, e.y_root))
+            except (KeyError, tk.TclError):
+                return
+            area = str(scroll_area)
+            if (w == area or w.startswith(area + ".")) and sb.winfo_ismapped():
+                canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+
+        inner.bind("<Configure>", sync)
+        canvas.bind("<Configure>", resized)
+        self.bind_all("<MouseWheel>", wheel)
+        self._sync_options = sync
+        return inner, run_area
+
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
-        top = ttk.Frame(self, padding=6)
+        top = self.top_bar = ttk.Frame(self, padding=self._px(6))
         top.pack(fill=tk.X)
         ttk.Label(top, text=t("folder") + ":").pack(side=tk.LEFT)
         self.folder_var = tk.StringVar()
@@ -253,26 +424,40 @@ class App(tk.Tk):
         lang_cb.pack(side=tk.LEFT, padx=(4, 0))
         lang_cb.bind("<<ComboboxSelected>>", lambda e: self._change_language(self.lang_var.get()))
 
+        # ---------------- status bar + log: packed before the middle part, so when the window is
+        # short it is the middle (table / scrollable options) that gives way, not these
+        self.status = tk.StringVar(value=t("deid_start_hint"))
+        ttk.Label(self, textvariable=self.status, anchor="w", padding=(8, 3)).pack(side=tk.BOTTOM, fill=tk.X)
+        bottom = self.log_box = ttk.LabelFrame(self, text=t("log"), padding=self._px(4))
+        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=6, pady=self._px(4))
+        self.log = tk.Text(bottom, height=self.log_lines, wrap="none", bg="#1e1e1e", fg="#dcdcdc",
+                           font=("Consolas", 9))
+        lsb = ttk.Scrollbar(bottom, orient=tk.VERTICAL, command=self.log.yview)
+        self.log.configure(yscrollcommand=lsb.set)
+        lsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.log.tag_configure("err", foreground="#ff8080")
+        self.log.tag_configure("hdr", foreground="#7ec8ff")
+
         main = ttk.Frame(self)
         main.pack(fill=tk.BOTH, expand=True, padx=6)
 
-        # ---------------- options (fixed width, packed first so it never gets squeezed) ------
-        right = ttk.Frame(main, padding=(8, 0), width=OPTIONS_W)
-        right.pack(side=tk.RIGHT, fill=tk.Y)
-        right.pack_propagate(False)
+        # ---------------- options (packed first so the table, not the options, gets squeezed) ----
+        right, run_area = self._build_options_panel(main)
 
         # ---------------- file table ----------------
         left = ttk.Frame(main)
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         cols = ("date", "time", "scanner", "label", "pages", "status")
-        self.tree = ttk.Treeview(left, columns=cols, show="tree headings", selectmode="extended")
+        self.tree = ttk.Treeview(left, columns=cols, show="tree headings", selectmode="extended",
+                                 height=5)
         self.tree.heading("#0", text=t("col_file"))
-        self.tree.column("#0", width=300, anchor="w")
+        self.tree.column("#0", width=self._px(300), anchor="w")
         for c, head, w in (("date", "Date", 90), ("time", "Time", 80),
                            ("scanner", "ScanScope ID", 100), ("label", t("col_label"), 60),
                            ("pages", t("col_pages"), 55), ("status", t("col_result"), 220)):
             self.tree.heading(c, text=head)
-            self.tree.column(c, width=w, anchor="w")
+            self.tree.column(c, width=self._px(w), anchor="w")
         vsb = ttk.Scrollbar(left, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
@@ -280,17 +465,18 @@ class App(tk.Tk):
         self.tree.tag_configure("err", foreground="#c00000")
         self.tree.tag_configure("done", foreground="#006000")
 
-        box = ttk.LabelFrame(right, text=t("box_date"), padding=6)
-        box.pack(fill=tk.X, pady=4)
+        box = ttk.LabelFrame(right, text=t("box_date"), padding=self._px(6))
+        box.pack(fill=tk.X, pady=self._px(4))
         self.date_var = tk.StringVar(value=DATE_CHOICES[0][0])
         for key, _, _ in DATE_CHOICES:
             ttk.Radiobutton(box, text=t(key), value=key, variable=self.date_var).pack(anchor="w")
         self.sample_var = tk.StringVar(value="")
-        ttk.Label(box, textvariable=self.sample_var, foreground="#0050a0").pack(anchor="w", pady=(4, 0))
+        self.sample_label = ttk.Label(box, textvariable=self.sample_var, foreground="#0050a0")
+        self.sample_label.pack(anchor="w", pady=(4, 0))
         self.date_var.trace_add("write", lambda *a: self._update_sample())
 
-        box2 = ttk.LabelFrame(right, text=t("box_remove"), padding=6)
-        box2.pack(fill=tk.X, pady=4)
+        box2 = ttk.LabelFrame(right, text=t("box_remove"), padding=self._px(6))
+        box2.pack(fill=tk.X, pady=self._px(4))
         self.rm_time = tk.BooleanVar(value=True)
         self.rm_ids = tk.BooleanVar(value=True)
         self.rm_label = tk.BooleanVar(value=True)
@@ -300,35 +486,39 @@ class App(tk.Tk):
         ttk.Checkbutton(box2, text=t("rm_label"), variable=self.rm_label).pack(anchor="w")
         ttk.Checkbutton(box2, text=t("rm_macro"), variable=self.rm_macro).pack(anchor="w")
 
-        box3 = ttk.LabelFrame(right, text=t("box_extra"), padding=6)
-        box3.pack(fill=tk.X, pady=4)
+        box3 = ttk.LabelFrame(right, text=t("box_extra"), padding=self._px(6))
+        box3.pack(fill=tk.X, pady=self._px(4))
         self.extra_var = tk.StringVar()
         ttk.Entry(box3, textvariable=self.extra_var).pack(fill=tk.X)
 
-        box4 = ttk.LabelFrame(right, text=t("box_run"), padding=6)
-        box4.pack(fill=tk.X, pady=4)
+        # ---------------- Run box: coloured so it stands out from the option boxes above
+        pad = self._px(8)
+        run = self.run_box = tk.Frame(run_area, bg=RUN_BG, highlightthickness=self._px(2),
+                                      highlightbackground=RUN_ACCENT, highlightcolor=RUN_ACCENT)
+        run.pack(fill=tk.X, pady=self._px(4))
+        self.run_title = tk.Label(run, text="▶ " + t("box_run"), font=self.run_font,
+                                  fg=RUN_ACCENT, bg=RUN_BG)
+        self.run_title.pack(anchor="w", padx=pad, pady=(self._px(6), self._px(2)))
         self.backup_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(box4, text=t("backup"), variable=self.backup_var).pack(anchor="w")
+        self.run_first_check = ttk.Checkbutton(run, text=t("backup"), variable=self.backup_var,
+                                               style="Run.TCheckbutton")
+        self.run_first_check.pack(anchor="w", padx=pad)
         self.sel_only = tk.BooleanVar(value=False)
-        ttk.Checkbutton(box4, text=t("sel_only"), variable=self.sel_only).pack(anchor="w")
-        ttk.Button(box4, text=t("preview_btn"), command=lambda: self.run(False)).pack(fill=tk.X, pady=(6, 2))
-        self.apply_btn = ttk.Button(box4, text=t("apply_btn"), command=lambda: self.run(True))
-        self.apply_btn.pack(fill=tk.X)
+        ttk.Checkbutton(run, text=t("sel_only"), variable=self.sel_only,
+                        style="Run.TCheckbutton").pack(anchor="w", padx=pad)
+        btns = self.run_btns = tk.Frame(run, bg=RUN_BG)   # side by side: one row less on short screens
+        btns.pack(fill=tk.X, padx=pad, pady=(self._px(6), pad))
+        btns.columnconfigure((0, 1), weight=1, uniform="run")
+        preview_btn = self._run_button(btns, t("preview_btn"), lambda: self.run(False),
+                                       PREVIEW_BG, PREVIEW_HOVER)
+        preview_btn.grid(row=0, column=0, sticky="ew", padx=(0, self._px(3)))
+        self.apply_btn = self._run_button(btns, t("apply_btn"), lambda: self.run(True),
+                                          APPLY_BG, APPLY_HOVER)
+        self.apply_btn.grid(row=0, column=1, sticky="ew", padx=(self._px(3), 0))
+        self.run_buttons = (preview_btn, self.apply_btn)
+        self._set_apply_enabled(not self.busy)
 
-        # ---------------- log ----------------
-        bottom = ttk.LabelFrame(self, text=t("log"), padding=4)
-        bottom.pack(fill=tk.BOTH, expand=False, padx=6, pady=4)
-        self.log = tk.Text(bottom, height=12, wrap="none", bg="#1e1e1e", fg="#dcdcdc",
-                           font=("Consolas", 9))
-        lsb = ttk.Scrollbar(bottom, orient=tk.VERTICAL, command=self.log.yview)
-        self.log.configure(yscrollcommand=lsb.set)
-        lsb.pack(side=tk.RIGHT, fill=tk.Y)
-        self.log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.log.tag_configure("err", foreground="#ff8080")
-        self.log.tag_configure("hdr", foreground="#7ec8ff")
-
-        self.status = tk.StringVar(value=t("deid_start_hint"))
-        ttk.Label(self, textvariable=self.status, anchor="w", padding=(8, 3)).pack(fill=tk.X)
+        self.option_boxes = (box, box2, box3)
 
         self.bind("<F5>", lambda e: self.scan())
         self._update_sample()
@@ -412,7 +602,7 @@ class App(tk.Tk):
                     self.status.set(payload)
                 elif kind == "done":
                     self.busy = False
-                    self.apply_btn.state(["!disabled"])
+                    self._set_apply_enabled(True)
         except queue.Empty:
             pass
         except tk.TclError:
@@ -509,7 +699,7 @@ class App(tk.Tk):
                 return
 
         self.busy = True
-        self.apply_btn.state(["disabled"])
+        self._set_apply_enabled(False)
         self.log.delete("1.0", "end")
         mode = t("deid_mode_apply") if apply else t("deid_mode_preview")
         self._log(t("deid_run_head", mode=mode, n=len(targets)), "hdr")
@@ -575,7 +765,9 @@ def setup_console():
         return
     try:
         import ctypes
-        ctypes.windll.kernel32.SetConsoleTitleW("SVS_Deid - 기록 창 (닫지 마세요)")
+        ctypes.windll.kernel32.SetConsoleTitleW(
+            "SVS_Deid - log window (do not close)" if i18n.get_lang() == "en"
+            else "SVS_Deid - 기록 창 (닫지 마세요)")
     except Exception:  # noqa
         pass
     try:
@@ -594,8 +786,11 @@ def main():
         try:
             import ctypes
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        except Exception:  # noqa
-            pass
+        except Exception:  # noqa - Windows 7 / 8.0
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:  # noqa
+                pass
     folder = sys.argv[1] if len(sys.argv) > 1 else ""
     if folder:
         console(t("con_start_folder", v=folder))

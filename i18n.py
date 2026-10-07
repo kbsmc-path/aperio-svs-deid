@@ -12,8 +12,8 @@ not in the widgets), so no per-widget bookkeeping is needed.
     t("sel_count", n=3, total=628)     -> "3 selected of 628"
 """
 
-LANGS = [("한국어", "ko"), ("English", "en")]
-DEFAULT = "ko"
+LANGS = [("English", "en"), ("한국어", "ko")]
+DEFAULT = "en"                  # language the program starts in
 _lang = DEFAULT
 
 

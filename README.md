@@ -57,7 +57,7 @@ overwritten with zeros and unlinked from the file, so no viewer can show them ag
 5. **Apply.** Confirm the dialog. Each file is edited, re-read and reported as *written and verified*.
 6. **Check the result.** Scan again, and open a few slides in your viewer before using the files.
 
-The interface is available in Korean and English (toolbar → *Language*). Everything shown in the log pane is also
+The interface starts in English; Korean is available from the toolbar (*Language*). Everything shown in the log pane is also
 appended to `svs_deid.log` next to the program.
 
 ## ⚠ Warnings — read before use
