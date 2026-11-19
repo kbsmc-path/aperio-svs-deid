@@ -25,24 +25,49 @@ processed in milliseconds, and the scanner banner and geometry fields that viewe
 kept (verified with OpenSlide: still read as an Aperio slide, all levels intact). Removed label and macro images are
 overwritten with zeros and unlinked from the file, so no viewer can show them again.
 
-## Download
+## Install and run
 
-- **Windows, no Python needed:** download `SVS_Deid.exe` from the
-  [Releases](https://github.com/kbsmc-path/aperio-svs-deid/releases) page and double-click it (or drop a folder onto
-  it). Windows may say *"Windows protected your PC"* because the file is not code-signed — click
-  **More info → Run anyway**. The black console window that opens with it is the log window; close the main window
-  to exit.
-- **From source:** Python 3.8+ with tkinter (included in the python.org installer). No other packages.
+Requires **Python 3.8+** with tkinter (included in the python.org installer). No other packages. The program is
+distributed as source only — there is no `.exe` download (see [Build your own .exe](#build-your-own-exe-optional)
+for why).
 
-  ```bat
-  git clone https://github.com/kbsmc-path/aperio-svs-deid.git
-  cd aperio-svs-deid
-  python svs_meta_gui.py
-  ```
+**Windows, without git**
 
-  On Windows you can also double-click `run.bat`. Keep all files together — `svs_meta_gui.py` needs `svs_meta.py`
-  and `i18n.py`. If something is missing, the program says what and how to install it
-  (Linux: `sudo apt install python3-tk`; macOS Homebrew: `brew install python-tk`).
+1. Install Python 3.8+ from [python.org](https://www.python.org/downloads/).
+2. On this page: **Code › Download ZIP**.
+3. Right-click the ZIP › **Properties** › at the bottom tick **Unblock** › **OK** — *before* extracting
+   (see [If Windows blocks it](#if-windows-blocks-it-smart-app-control)).
+4. Extract the ZIP and double-click `run.bat` (or drag a folder onto it). A black console window opens alongside —
+   it is the log window; close the main window to exit.
+
+Keep all files in one folder (`svs_meta_gui.py` needs `svs_meta.py` and `i18n.py`). `run.bat` uses `.venv` if
+present, otherwise the `python` on PATH or the `py` launcher.
+
+**With git, or on Linux / macOS**
+
+```bat
+git clone https://github.com/kbsmc-path/aperio-svs-deid.git
+cd aperio-svs-deid
+python svs_meta_gui.py
+```
+
+If something is missing, the program says what and how to install it
+(Linux: `sudo apt install python3-tk`; macOS Homebrew: `brew install python-tk`).
+
+## If Windows blocks it (Smart App Control)
+
+On Windows 11 with **Smart App Control** turned on, files downloaded from the internet are marked, and a marked
+`run.bat` is refused with *"Smart App Control blocked …"* / *"Dangerous file extension from the web"*. Unblocking the
+ZIP before extracting it (step 3 above) removes the mark from everything inside.
+
+Already extracted without unblocking? Right-click `run.bat` › Properties › tick **Unblock**, or in PowerShell in that
+folder: `Get-ChildItem | Unblock-File`.
+
+**한국어:** exe 파일은 배포하지 않고 소스로만 제공합니다 (서명되지 않은 exe는 Windows 스마트 앱 컨트롤이 차단합니다).
+[python.org](https://www.python.org/downloads/)에서 Python 3.8 이상 설치 → 이 페이지에서 **Code › Download ZIP** →
+**압축을 풀기 전에** ZIP 우클릭 › **속성** › **차단 해제** 체크 › **확인** → 압축을 풀고 `run.bat` 더블클릭.
+함께 뜨는 검은 창은 기록 창입니다. 이미 압축을 풀었는데 "스마트 앱 컨트롤이 차단했습니다"가 뜨면 `run.bat`
+우클릭 › 속성 › 차단 해제 하면 됩니다.
 
 ## How to use
 
@@ -94,7 +119,11 @@ appended to `svs_deid.log` next to the program.
   output yourself before sharing any data. This software is provided **"as is", without warranty of any kind** (see
   [LICENSE](LICENSE)).
 
-## Build the .exe yourself
+## Build your own .exe (optional)
+
+No `.exe` is published: it would not be code-signed, and Windows Smart App Control blocks unsigned executables it does not know
+(whether built as console or windowed) with no way for the user to allow them. For PCs where Smart App Control is
+off, you can build one yourself:
 
 ```bat
 python -m pip install pyinstaller

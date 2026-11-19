@@ -2,9 +2,9 @@
 Build a standalone Windows .exe of the SVS de-identification GUI (svs_meta_gui.py) with PyInstaller.
 
 The Python sources are left untouched - this only produces exe\\SVS_Deid.exe, which runs without
-Python. Console mode on purpose: Windows Smart App Control blocks PyInstaller's *windowed*
-bootloader as an unsigned, unknown binary, while the console one is let through. The console
-window also shows the log.
+Python. Console mode on purpose: the console window shows the log. The exe is not code-signed,
+so Windows Smart App Control can block it whether it is built as console or windowed; on such
+PCs run from source instead (README: "If Windows blocks it"). No .exe is published for that reason.
 
 Usage:
     python -m pip install pyinstaller
