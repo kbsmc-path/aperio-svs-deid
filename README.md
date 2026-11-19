@@ -60,14 +60,19 @@ On Windows 11 with **Smart App Control** turned on, files downloaded from the in
 `run.bat` is refused with *"Smart App Control blocked …"* / *"Dangerous file extension from the web"*. Unblocking the
 ZIP before extracting it (step 3 above) removes the mark from everything inside.
 
-Already extracted without unblocking? Right-click `run.bat` › Properties › tick **Unblock**, or in PowerShell in that
-folder: `Get-ChildItem | Unblock-File`.
+Already extracted without unblocking? Either of these works:
+
+- Right-click `run.bat` › Properties › tick **Unblock** (or in PowerShell in that folder:
+  `Get-ChildItem | Unblock-File`), then double-click it as usual.
+- Or start it from a command window, which is not blocked: open the extracted folder in Explorer, click the address
+  bar, type `cmd` and press Enter, then type `run.bat` and press Enter.
 
 **한국어:** exe 파일은 배포하지 않고 소스로만 제공합니다 (서명되지 않은 exe는 Windows 스마트 앱 컨트롤이 차단합니다).
 [python.org](https://www.python.org/downloads/)에서 Python 3.8 이상 설치 → 이 페이지에서 **Code › Download ZIP** →
 **압축을 풀기 전에** ZIP 우클릭 › **속성** › **차단 해제** 체크 › **확인** → 압축을 풀고 `run.bat` 더블클릭.
 함께 뜨는 검은 창은 기록 창입니다. 이미 압축을 풀었는데 "스마트 앱 컨트롤이 차단했습니다"가 뜨면 `run.bat`
-우클릭 › 속성 › 차단 해제 하면 됩니다.
+우클릭 › 속성 › 차단 해제 하면 됩니다. 또는 압축을 푼 폴더의 주소 표시줄에 `cmd`를 입력하고 Enter → 열린 창에
+`run.bat`을 입력하고 Enter 하면 차단 해제 없이도 실행됩니다.
 
 ## How to use
 
